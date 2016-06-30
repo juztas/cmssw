@@ -171,9 +171,23 @@ DavixFile::read (void *into, IOSize n)
 IOSize
 DavixFile::write (const void *from, IOSize n)
 {
-  cms::Exception ex("FileWriteError");
-  ex << "DavixFile::write(name='" << m_name << "') not implemented";
-  throw ex;
+  IOSize done = 0;
+  DavixError* davixErr = NULL;
+  while (done < n)
+  {
+    ssize_t s = davixPosix->pwrite (m_fd, (const char *) from + done, n, n - done, &davixErr);
+    if (davixErr || s < -1) {
+      cms::Exception ex("FileWriteError");
+      ex << "Davix write(name='" << m_name << "', n=" << (n-done)
+         << ") failed with error '" << davixErr->getErrMsg().c_str()
+         << " and error code " << davixErr->getStatus()
+         << " and call returned " << s << " bytes";
+      ex.addContext("Calling DavixFile::write()");
+      throw ex;
+    }
+    done += s;
+  }
+  return done;
 }
 
 
