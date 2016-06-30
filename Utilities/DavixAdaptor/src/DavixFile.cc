@@ -49,13 +49,23 @@ Context* DavixFile::getDavixInstance()
 void
 DavixFile::close (void)
 {
-  return;
+ if (davixPosix != NULL && m_fd != NULL){
+   DavixError* err = NULL;
+   davixPosix->close(m_fd, &err);
+   delete davixPosix;
+ }
+ return;
 } 
 
 
 void
 DavixFile::abort (void)
 {
+  if (davixPosix != NULL && m_fd != NULL){
+    DavixError* err = NULL;
+    davixPosix->close(m_fd, &err);
+    delete davixPosix;
+  }
   return;
 }
 
@@ -111,6 +121,9 @@ DavixFile::open (const char *name,
     throw ex;
   }
 
+  // Is davix open and there is an fd? If so, close it
+  if (davixPosix != NULL || m_fd != NULL)
+    close();
   // Translate our flags to system flags
   int openflags = 0;
 
