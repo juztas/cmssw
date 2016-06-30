@@ -139,6 +139,40 @@ DavixFile::open (const char *name,
   m_name = name;
 }
 
+IOSize
+DavixFile::readv (IOBuffer *into, IOSize buffers)
+{
+  assert (! buffers || into);
+
+  // Davix does not support 0 buffers;
+  if (! buffers)
+    return 0;
+
+  DavixError* davixErr = NULL;
+
+  DavIOVecInput input_vector[buffers];
+  DavIOVecOuput output_vector[buffers];
+  IOSize total = 0; // Total requested bytes
+  for (IOSize i = 0; i < buffers; ++i)
+  {
+    input_vector[i].diov_size = into [i].size ();
+    input_vector[i].diov_buffer =  (char *) into [i].data();
+    total += into [i].size ();
+  }
+
+  ssize_t s = davixPosix->preadVec (m_fd, input_vector, output_vector, buffers, &davixErr);
+  if (davixErr || s < 0)
+  {
+    edm::Exception ex(edm::errors::FileReadError);
+    ex << "Davix readv (name='" << m_name << "', buffers=" << (buffers)
+       << ") failed with error '" << davixErr->getErrMsg().c_str()
+       << " and error code " << davixErr->getStatus()
+       << " and call returned " << s << " bytes";
+    ex.addContext("Calling DavixFile::read()");
+    throw ex;
+  }
+  return total;
+}
 
 IOSize
 DavixFile::read (void *into, IOSize n)
