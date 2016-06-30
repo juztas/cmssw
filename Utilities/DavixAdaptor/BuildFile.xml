@@ -1,0 +1,10 @@
+<export>
+    <lib   name="1"/>
+    <flags   CPPDEFINES="_FILE_OFFSET_BITS=64"/>
+</export>
+<use   name="Utilities/StorageFactory"/>
+<use   name="FWCore/Utilities"/>
+<use   name="FWCore/MessageLogger"/>
+<use   name="davix"/>
+<flags   CPPDEFINES="_FILE_OFFSET_BITS=64"/>
+<flags   CXXFLAGS="-I/cvmfs/cms.cern.ch/slc6_amd64_gcc530/external/davix/0.6.0-giojec/include/davix/"/>
