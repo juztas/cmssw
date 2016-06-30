@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <stdlib.h>
+#include <errno.h>
 #include <davix.hpp>
 
 using namespace Davix;
@@ -32,6 +33,7 @@ DavixFile::DavixFile (const std::string &name,
 
 DavixFile::~DavixFile (void)
 {
+    configureDavixLogLevel();
     close();
     return;
 }
@@ -67,6 +69,93 @@ DavixFile::abort (void)
     delete davixPosix;
   }
   return;
+}
+
+
+void DavixFile::configureDavixLogLevel()
+{
+  long logLevel= 0;
+  char* davixDebug;
+  char* logptr;
+  davixDebug = getenv("Davix_Debug");
+  if (davixDebug != NULL)
+  {
+    logLevel = strtol(davixDebug, &logptr, 0);
+    if (errno) {
+      edm::LogWarning("DavixFile") << "Got error while converting"
+          << "Davix_Debug env variable to integer. Will use default log level 0";
+      logLevel = 0;
+    }
+    if (logptr == davixDebug) {
+      edm::LogWarning("DavixFile") << "Failed to convert to integer"
+          << "Davix_Debug env variable; Will use default log level 0";
+      logLevel = 0;
+    }
+    else if (*logptr != '\0') {
+      edm::LogWarning("DavixFile") << "Failed to parse extra junk"
+         << "from Davix_Debug env variable. Will use default log level 0";
+      logLevel = 0;
+    }
+  }
+
+  switch (logLevel) {
+    case 0:
+      davix_set_log_level(0);
+      break;
+    case 1:
+      davix_set_log_level(DAVIX_LOG_WARNING);
+      break;
+    case 2:
+      davix_set_log_level(DAVIX_LOG_VERBOSE);
+      break;
+    case 3:
+      davix_set_log_level(DAVIX_LOG_DEBUG);
+      break;
+    default:
+      davix_set_log_level(DAVIX_LOG_ALL);
+      break;
+  }
+}
+
+
+
+static int X509Authentication(void *userdata, const SessionInfo &info,
+                   X509Credential *cert, DavixError **davixErr)
+{
+  std::string ucert, ukey;
+  char default_proxy[64];
+  snprintf(default_proxy, sizeof(default_proxy), "/tmp/x509up_u%d", geteuid());
+  // X509_USER_PROXY
+  if (getenv("X509_USER_PROXY")) {
+    edm::LogInfo("DavixFile") << "X509_USER_PROXY found in envinronment."
+       << " Will use it for authentication";
+    ucert = ukey = getenv("X509_USER_PROXY");
+  }
+  // Default proxy location
+  else if (access(default_proxy, R_OK) == 0) {
+      edm::LogInfo("DavixFile") << "found proxy in default location " << default_proxy
+         << " Will use it for authentication";
+      ucert = ukey = default_proxy;
+  }
+  // X509_USER_CERT
+  else if (getenv("X509_USER_CERT")){
+      ucert = getenv("X509_USER_CERT");
+  }
+  // X509_USER_KEY only if X509_USER_CERT was found
+  if (!ucert.empty() && getenv("X509_USER_KEY")){
+      edm::LogInfo("DavixFile") << "X509_USER_{CERT|KEY} found in envinronment"
+         << " Will use it for authentication";
+      ukey = getenv("X509_USER_KEY");
+  }
+
+  if (ucert.empty() || ukey.empty()) {
+      edm::LogWarning("DavixFile") << "Was not able to find proxy in $X509_USER_PROXY, "
+         << "X509_USER_{CERT|KEY} or default proxy creation location. "
+         << "Will try without authentication";
+      return -1;
+  }
+
+  return cert->loadFromFilePEM(ukey, ucert, "", davixErr);
 }
 
 
@@ -121,6 +210,7 @@ DavixFile::open (const char *name,
     throw ex;
   }
 
+  configureDavixLogLevel();
   // Is davix open and there is an fd? If so, close it
   if (davixPosix != NULL || m_fd != NULL)
     close();
@@ -135,9 +225,17 @@ DavixFile::open (const char *name,
     openflags |= O_WRONLY;
 
   DavixError* davixErr = NULL;
+  davixReqParams = new RequestParams();
+  // Set up X509 authentication
+  davixReqParams->setClientCertCallbackX509(&X509Authentication, NULL);
+  // Set also CERT_DIR if it is set in envinroment, otherwise use default
+  const char *cert_dir = NULL;
+  if ( (cert_dir = getenv("X509_CERT_DIR")) == NULL)
+    cert_dir = "/etc/grid-security/certificates";
+  davixReqParams->addCertificateAuthorityPath(cert_dir);
 
   davixPosix = new DavPosix(getDavixInstance());
-  m_fd = davixPosix->open(NULL, name, O_RDONLY, &davixErr);
+  m_fd = davixPosix->open(davixReqParams, name, O_RDONLY, &davixErr);
 
   // Check Davix Error
   if (davixErr || m_fd == NULL)
@@ -169,6 +267,9 @@ DavixFile::readv (IOBuffer *into, IOSize buffers)
   IOSize total = 0; // Total requested bytes
   for (IOSize i = 0; i < buffers; ++i)
   {
+    edm::LogInfo("DavixFile") << "Setting configuration for Davix"
+       << " Size: " << into [i].size() << " Current buffer: " << i
+       << " Total buffers: " << buffers;
     input_vector[i].diov_size = into [i].size ();
     input_vector[i].diov_buffer =  (char *) into [i].data();
     total += into [i].size ();
@@ -178,11 +279,11 @@ DavixFile::readv (IOBuffer *into, IOSize buffers)
   if (davixErr || s < 0)
   {
     edm::Exception ex(edm::errors::FileReadError);
-    ex << "Davix readv (name='" << m_name << "', buffers=" << (buffers)
+    ex << "Davix readv(name='" << m_name << "', buffers=" << (buffers)
        << ") failed with error '" << davixErr->getErrMsg().c_str()
        << " and error code " << davixErr->getStatus()
        << " and call returned " << s << " bytes";
-    ex.addContext("Calling DavixFile::read()");
+    ex.addContext("Calling DavixFile::readv()");
     throw ex;
   }
   return total;
@@ -205,6 +306,9 @@ DavixFile::readv (IOPosBuffer *into, IOSize buffers)
   IOSize total = 0;
   for (IOSize i = 0; i < buffers; ++i)
   {
+    edm::LogInfo("DavixFileInfo") << "Setting configuration for Davix"
+       << " Offset: " << into [i].offset() << " Size: " << into [i].size()
+       << " Current buffer: " << i << " Total buffers: " << buffers;
     input_vector[i].diov_offset = into [i].offset ();
     input_vector[i].diov_size = into [i].size();
     input_vector[i].diov_buffer =  (char *) into [i].data();
@@ -214,11 +318,11 @@ DavixFile::readv (IOPosBuffer *into, IOSize buffers)
   if (davixErr || s < 0)
   {
     edm::Exception ex(edm::errors::FileReadError);
-    ex << "Davix read (name='" << m_name << "', n=" << buffers
+    ex << "Davix readv (name='" << m_name << "', n=" << buffers
        << ") failed with error '" << davixErr->getErrMsg().c_str()
        << " and error code " << davixErr->getStatus()
        << " and call returned " << s << " bytes";
-    ex.addContext("Calling DavixFile::read()");
+    ex.addContext("Calling DavixFile::readv()");
     throw ex;
   }
   else if (s == 0)
@@ -295,7 +399,7 @@ DavixFile::position (IOOffset offset, Relative whence /* = SET */)
 
   if ((result = davixPosix->lseek (m_fd, offset, mywhence, &davixErr)) == -1) {
     cms::Exception ex("FilePositionError");
-    ex << "dc_lseek64(name='" << m_name << "', offset=" << offset
+    ex << "Davix lseek(name='" << m_name << "', offset=" << offset
        << ", whence=" << mywhence << ") failed with "
        << "error " << davixErr->getErrMsg().c_str() << " and "
        << "error code " << davixErr->getStatus() << " and "
@@ -315,4 +419,4 @@ DavixFile::resize (IOOffset /* size */)
   ex << "DavixFile::resize(name='" << m_name << "') not implemented";
   throw ex;
 }
-        
+

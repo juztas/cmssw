@@ -12,6 +12,7 @@ public:
   DavixFile (const std::string &name, int flags = IOFlags::OpenRead, int perms = 0666);
   ~DavixFile (void);
   static Davix::Context *    getDavixInstance();
+  static void                configureDavixLogLevel();
 
   virtual void	create (const char *name,
     			bool exclusive = false,
@@ -44,6 +45,7 @@ private:
   Davix_fd *             m_fd;
   Davix::Context *       davixContext;
   Davix::DavPosix *      davixPosix;
+  Davix::RequestParams * davixReqParams;
   std::string		     m_name;
 };
 
